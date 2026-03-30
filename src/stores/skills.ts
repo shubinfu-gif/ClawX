@@ -71,6 +71,7 @@ interface SkillsState {
   searchSkills: (query: string) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<void>;
   uninstallSkill: (slug: string) => Promise<void>;
+  updateSkillFromApi: (slug: string, version?: string) => Promise<{ success: boolean; previousVersion?: string; newVersion?: string; error?: string }>;
   enableSkill: (skillId: string) => Promise<void>;
   disableSkill: (skillId: string) => Promise<void>;
   setSkills: (skills: Skill[]) => void;
@@ -241,6 +242,31 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     } catch (error) {
       console.error('Uninstall error:', error);
       throw error;
+    } finally {
+      set((state) => {
+        const newInstalling = { ...state.installing };
+        delete newInstalling[slug];
+        return { installing: newInstalling };
+      });
+    }
+  },
+
+  updateSkillFromApi: async (slug: string, version?: string) => {
+    set((state) => ({ installing: { ...state.installing, [slug]: true } }));
+    try {
+      const result = await hostApiFetch<{ success: boolean; previousVersion?: string; newVersion?: string; error?: string }>('/api/clawhub/update', {
+        method: 'POST',
+        body: JSON.stringify({ slug, version }),
+      });
+      // Refresh skills after update
+      await get().fetchSkills();
+      return result;
+    } catch (error) {
+      console.error('Update error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       set((state) => {
         const newInstalling = { ...state.installing };

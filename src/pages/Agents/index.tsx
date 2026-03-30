@@ -53,6 +53,14 @@ interface RuntimeProviderOption {
   configuredModelId?: string;
 }
 
+interface ProviderAccountOption {
+  accountId: string;
+  label: string;
+  vendorId: string;
+  vendorName: string;
+  configuredModelId?: string;
+}
+
 function resolveRuntimeProviderKey(account: ProviderAccount): string {
   if (account.authMode === 'oauth_browser') {
     if (account.vendorId === 'google') return 'google-gemini-cli';
@@ -692,17 +700,53 @@ function AgentModelModal({
   const providerStatuses = useProviderStore((state) => state.statuses);
   const providerVendors = useProviderStore((state) => state.vendors);
   const providerDefaultAccountId = useProviderStore((state) => state.defaultAccountId);
-  const { updateAgentModel, defaultModelRef } = useAgentsStore();
+  const { updateAgentModel, updateAgentProviderAccount, defaultModelRef } = useAgentsStore();
+  const [selectedProviderAccountId, setSelectedProviderAccountId] = useState<string>('');
   const [selectedRuntimeProviderKey, setSelectedRuntimeProviderKey] = useState('');
   const [modelIdInput, setModelIdInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
+  // Build list of all enabled provider accounts (not deduplicated)
+  const providerAccountOptions = useMemo<ProviderAccountOption[]>(() => {
+    const vendorMap = new Map<string, ProviderVendorInfo>(providerVendors.map((vendor) => [vendor.id, vendor]));
+    const statusById = new Map<string, ProviderWithKeyInfo>(providerStatuses.map((status) => [status.id, status]));
+    return providerAccounts
+      .filter((account) => account.enabled && hasConfiguredProviderCredentials(account, statusById))
+      .sort((left, right) => {
+        if (left.id === providerDefaultAccountId) return -1;
+        if (right.id === providerDefaultAccountId) return 1;
+        return right.updatedAt.localeCompare(left.updatedAt);
+      })
+      .map((account) => {
+        const vendor = vendorMap.get(account.vendorId);
+        const runtimeProviderKey = resolveRuntimeProviderKey(account);
+        const configuredModelId = account.model
+          ? (account.model.startsWith(`${runtimeProviderKey}/`)
+            ? account.model.slice(runtimeProviderKey.length + 1)
+            : account.model)
+          : undefined;
+        return {
+          accountId: account.id,
+          label: `${account.label} (${vendor?.name || account.vendorId})`,
+          vendorId: account.vendorId,
+          vendorName: vendor?.name || account.vendorId,
+          configuredModelId,
+        };
+      });
+  }, [providerAccounts, providerDefaultAccountId, providerStatuses, providerVendors]);
+
+  // Build deduplicated runtime provider options filtered by selected account (if any)
   const runtimeProviderOptions = useMemo<RuntimeProviderOption[]>(() => {
     const vendorMap = new Map<string, ProviderVendorInfo>(providerVendors.map((vendor) => [vendor.id, vendor]));
     const statusById = new Map<string, ProviderWithKeyInfo>(providerStatuses.map((status) => [status.id, status]));
-    const entries = providerAccounts
-      .filter((account) => account.enabled && hasConfiguredProviderCredentials(account, statusById))
+
+    // Filter accounts: if a specific account is selected, only show that account's vendor
+    const filteredAccounts = selectedProviderAccountId
+      ? providerAccounts.filter((account) => account.id === selectedProviderAccountId)
+      : providerAccounts.filter((account) => account.enabled && hasConfiguredProviderCredentials(account, statusById));
+
+    const entries = filteredAccounts
       .sort((left, right) => {
         if (left.id === providerDefaultAccountId) return -1;
         if (right.id === providerDefaultAccountId) return 1;
@@ -731,9 +775,14 @@ function AgentModelModal({
     }
 
     return [...deduped.values()];
-  }, [providerAccounts, providerDefaultAccountId, providerStatuses, providerVendors]);
+  }, [selectedProviderAccountId, providerAccounts, providerDefaultAccountId, providerStatuses, providerVendors]);
 
+  // Initialize state from agent config
   useEffect(() => {
+    // Set provider account
+    setSelectedProviderAccountId(agent.providerAccountId || '');
+
+    // Set model ref
     const override = splitModelRef(agent.overrideModelRef);
     if (override) {
       setSelectedRuntimeProviderKey(override.providerKey);
@@ -748,9 +797,10 @@ function AgentModelModal({
       return;
     }
 
+    // Default to first provider option if no model set
     setSelectedRuntimeProviderKey(runtimeProviderOptions[0]?.runtimeProviderKey || '');
     setModelIdInput('');
-  }, [agent.modelRef, agent.overrideModelRef, defaultModelRef, runtimeProviderOptions]);
+  }, [agent.providerAccountId, agent.modelRef, agent.overrideModelRef, defaultModelRef, runtimeProviderOptions]);
 
   const selectedProvider = runtimeProviderOptions.find((option) => option.runtimeProviderKey === selectedRuntimeProviderKey) || null;
   const trimmedModelId = modelIdInput.trim();
@@ -764,9 +814,10 @@ function AgentModelModal({
     ? nextModelRef
     : null;
   const modelChanged = (desiredOverrideModelRef || '') !== currentOverrideModelRef;
+  const providerAccountChanged = selectedProviderAccountId !== (agent.providerAccountId || '');
 
   const handleRequestClose = () => {
-    if (savingModel || modelChanged) {
+    if (savingModel || modelChanged || providerAccountChanged) {
       setShowCloseConfirm(true);
       return;
     }
@@ -782,7 +833,6 @@ function AgentModelModal({
       toast.error(t('toast.agentModelIdRequired'));
       return;
     }
-    if (!modelChanged) return;
     if (!nextModelRef.includes('/')) {
       toast.error(t('toast.agentModelInvalid'));
       return;
@@ -790,6 +840,11 @@ function AgentModelModal({
 
     setSavingModel(true);
     try {
+      // Save provider account if changed
+      if (providerAccountChanged) {
+        await updateAgentProviderAccount(agent.id, selectedProviderAccountId || null);
+      }
+      // Save model
       await updateAgentModel(agent.id, desiredOverrideModelRef);
       toast.success(desiredOverrideModelRef ? t('toast.agentModelUpdated') : t('toast.agentModelReset'));
       onClose();
@@ -834,6 +889,33 @@ function AgentModelModal({
         </CardHeader>
         <CardContent className="space-y-4 p-6 pt-4">
           <div className="space-y-2">
+            <Label htmlFor="agent-provider-account" className="text-[12px] text-foreground/70">
+              {t('settingsDialog.providerAccountLabel', 'Provider Account')}
+            </Label>
+            <select
+              id="agent-provider-account"
+              value={selectedProviderAccountId}
+              onChange={(event) => {
+                const nextAccountId = event.target.value;
+                setSelectedProviderAccountId(nextAccountId);
+                // Reset model selection when account changes
+                setSelectedRuntimeProviderKey('');
+                setModelIdInput('');
+              }}
+              className={selectClasses}
+            >
+              <option value="">{t('settingsDialog.providerAccountDefault', 'Use Default Account')}</option>
+              {providerAccountOptions.map((option) => (
+                <option key={option.accountId} value={option.accountId}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-foreground/60">
+              {t('settingsDialog.providerAccountHint', 'Select a specific account for this agent, or leave empty to use the global default.')}
+            </p>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="agent-model-provider" className="text-[12px] text-foreground/70">{t('settingsDialog.modelProviderLabel')}</Label>
             <select
               id="agent-model-provider"
@@ -847,6 +929,7 @@ function AgentModelModal({
                 }
               }}
               className={selectClasses}
+              disabled={!selectedProviderAccountId && runtimeProviderOptions.length <= 1}
             >
               <option value="">{t('settingsDialog.modelProviderPlaceholder')}</option>
               {runtimeProviderOptions.map((option) => (
@@ -894,7 +977,7 @@ function AgentModelModal({
             </Button>
             <Button
               onClick={() => void handleSaveModel()}
-              disabled={savingModel || !selectedRuntimeProviderKey || !trimmedModelId || !modelChanged}
+              disabled={savingModel || (!modelChanged && !providerAccountChanged) || !selectedRuntimeProviderKey || !trimmedModelId}
               className="h-9 text-[13px] font-medium rounded-full px-4 shadow-none"
             >
               {savingModel ? (

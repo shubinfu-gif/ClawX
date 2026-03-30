@@ -43,6 +43,8 @@ interface AgentListEntry extends Record<string, unknown> {
   workspace?: string;
   agentDir?: string;
   model?: string | AgentModelConfig;
+  /** Optional provider account ID for agent-level model override */
+  providerAccountId?: string;
 }
 
 interface AgentsConfig extends Record<string, unknown> {
@@ -521,6 +523,7 @@ async function buildSnapshotFromConfig(config: AgentConfigDocument): Promise<Age
       channelTypes: configuredChannels
         .filter((ct) => ownedChannels.has(ct))
         .map((channelType) => toUiChannelType(channelType)),
+      providerAccountId: entry.providerAccountId || null,
     };
   });
 
@@ -649,6 +652,40 @@ export async function updateAgentModel(agentId: string, modelRef: string | null)
 
     await writeOpenClawConfig(config);
     logger.info('Updated agent model', { agentId, modelRef: normalizedModelRef || null });
+    return buildSnapshotFromConfig(config);
+  });
+}
+
+export async function updateAgentProviderAccount(
+  agentId: string,
+  providerAccountId: string | null,
+): Promise<AgentsSnapshot> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawConfig() as AgentConfigDocument;
+    const { agentsConfig, entries } = normalizeAgentsConfig(config);
+    const index = entries.findIndex((entry) => entry.id === agentId);
+    if (index === -1) {
+      throw new Error(`Agent "${agentId}" not found`);
+    }
+
+    const normalizedProviderAccountId =
+      typeof providerAccountId === 'string' ? providerAccountId.trim() : '';
+    const nextEntry: AgentListEntry = { ...entries[index] };
+
+    if (!normalizedProviderAccountId) {
+      delete nextEntry.providerAccountId;
+    } else {
+      nextEntry.providerAccountId = normalizedProviderAccountId;
+    }
+
+    entries[index] = nextEntry;
+    config.agents = {
+      ...agentsConfig,
+      list: entries,
+    };
+
+    await writeOpenClawConfig(config);
+    logger.info('Updated agent provider account', { agentId, providerAccountId: normalizedProviderAccountId || null });
     return buildSnapshotFromConfig(config);
   });
 }

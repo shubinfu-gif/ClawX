@@ -10,6 +10,8 @@ export interface AgentSummary {
   agentDir: string;
   mainSessionKey: string;
   channelTypes: string[];
+  /** Optional provider account ID for agent-level model override */
+  providerAccountId?: string | null;
 }
 
 export interface AgentsSnapshot {

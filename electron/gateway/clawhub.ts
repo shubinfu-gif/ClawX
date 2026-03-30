@@ -23,6 +23,12 @@ export interface ClawHubUninstallParams {
     slug: string;
 }
 
+export interface ClawHubUpdateParams {
+    slug: string;
+    version?: string;
+    force?: boolean;
+}
+
 export interface ClawHubSkillResult {
     slug: string;
     name: string;
@@ -340,6 +346,47 @@ export class ClawHubService {
             } catch (err) {
                 console.error('Failed to update ClawHub lock file:', err);
             }
+        }
+    }
+
+    /**
+     * Update a skill to the latest version
+     */
+    async update(params: ClawHubUpdateParams): Promise<{ success: boolean; previousVersion?: string; newVersion?: string; error?: string }> {
+        try {
+            const args = ['update', params.slug];
+
+            if (params.version) {
+                args.push('--version', params.version);
+            }
+
+            if (params.force) {
+                args.push('--force');
+            }
+
+            // Get current version before update
+            const installed = await this.listInstalled();
+            const currentSkill = installed.find(s => s.slug === params.slug);
+            const previousVersion = currentSkill?.version;
+
+            await this.runCommand(args);
+
+            // Get new version after update
+            const updated = await this.listInstalled();
+            const updatedSkill = updated.find(s => s.slug === params.slug);
+            const newVersion = updatedSkill?.version;
+
+            return {
+                success: true,
+                previousVersion,
+                newVersion,
+            };
+        } catch (error) {
+            console.error('ClawHub update error:', error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+            };
         }
     }
 

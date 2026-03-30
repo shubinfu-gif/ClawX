@@ -403,6 +403,7 @@ export function Skills() {
     searchSkills,
     installSkill,
     uninstallSkill,
+    updateSkillFromApi,
     searching,
     searchError,
     installing
@@ -602,6 +603,23 @@ export function Skills() {
     }
   }, [uninstallSkill, t]);
 
+  const handleUpdate = useCallback(async (slug: string) => {
+    try {
+      const result = await updateSkillFromApi(slug);
+      if (result.success) {
+        if (result.previousVersion && result.newVersion && result.previousVersion !== result.newVersion) {
+          toast.success(t('toast.updated', { from: result.previousVersion, to: result.newVersion }));
+        } else {
+          toast.success(t('toast.upToDate', { version: result.newVersion }));
+        }
+      } else {
+        throw new Error(result.error || 'Update failed');
+      }
+    } catch (err) {
+      toast.error(t('toast.failedUpdate') + ': ' + String(err));
+    }
+  }, [updateSkillFromApi, t]);
+
   if (loading) {
     return (
       <div className="flex flex-col -m-6 dark:bg-background min-h-[calc(100vh-2.5rem)] items-center justify-center">
@@ -795,6 +813,19 @@ export function Skills() {
                       <span className="text-[13px] font-mono text-muted-foreground">
                         v{skill.version}
                       </span>
+                    )}
+                    {!skill.isCore && !skill.isBundled && skill.slug && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleUpdate(skill.slug)}
+                        disabled={!!installing[skill.slug || skill.id]}
+                        className="h-7 text-[11px] font-medium px-2.5 rounded-full border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/70 hover:text-foreground gap-1"
+                        title={t('actions.update', 'Update')}
+                      >
+                        <RefreshCw className={cn("h-3 w-3", installing[skill.slug || skill.id] && "animate-spin")} />
+                        {t('actions.update', 'Update')}
+                      </Button>
                     )}
                     <Switch
                       checked={skill.enabled}
